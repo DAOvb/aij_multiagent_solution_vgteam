@@ -1,0 +1,15 @@
+/src/build/
+/src/sandbox/
+/hydra/multirun/
+/hydra/outputs/
+/artifacts/
+/logs
+/multirun
+**/__pycache__
+/outputs/*
+.idea
+*.ckpt
+*.o
+*.so
+**/.vscode/
+**/.pytest_cache
