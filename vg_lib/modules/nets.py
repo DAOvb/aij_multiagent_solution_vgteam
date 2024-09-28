@@ -25,7 +25,7 @@ class ConvEncoder(nn.Module):
     x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1), name='conv3',
                 dtype=dtype)(x)
     x = nn.relu(x)
-    x = x.reshape(x.shape[0],x.shape[1], -1) #flatten
+    x = x.reshape(x.shape[0], x.shape[1], -1)
     return x
 
 class ScannedRNN(nn.Module):
@@ -65,7 +65,7 @@ class ActorRNN(nn.Module):
         image, vector = obs
         processed_image = ConvEncoder()(image)
         processed_vector = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(vector)
-        full_obs = jax.lax.concatenate([processed_image, processed_vector], 2)
+        full_obs = jnp.concatenate([processed_image, processed_vector], -1)
         embedding = nn.Dense(
             self.config["FC_DIM_SIZE"], kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(full_obs)
@@ -81,7 +81,6 @@ class ActorRNN(nn.Module):
         action_logits = nn.Dense(
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_mean)
-
         pi = distrax.Categorical(logits=action_logits)
 
         return hidden, pi
@@ -95,7 +94,7 @@ class CriticRNN(nn.Module):
         image, vector = world_state
         processed_image = ConvEncoder()(image)
         processed_vector = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(vector)
-        full_obs = jax.lax.concatenate([processed_image, processed_vector], 2)
+        full_obs = jnp.concatenate([processed_image, processed_vector], -1)
         embedding = nn.Dense(
             self.config["FC_DIM_SIZE"], kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(full_obs)
