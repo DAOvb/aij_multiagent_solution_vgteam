@@ -4,6 +4,7 @@ from typing import NamedTuple, Any
 from flax.training.train_state import TrainState
 import optax
 import flax.linen as nn
+from functools import partial
 
 NUM_AGENTS = 8
 AGENT_KEYS = [f"agent_{i}" for i in range(NUM_AGENTS)]
@@ -23,7 +24,7 @@ class Transition(NamedTuple):
     obs_feats: jnp.ndarray
     world_image: jnp.ndarray
     world_feats: jnp.ndarray
-    info: jnp.ndarray
+    # info: jnp.ndarray
 
 
 def batchify(x, key, config):
@@ -38,7 +39,7 @@ def batchify_image(x, config):
 
 def unbatchify_acts(x, num_envs):
     x = x.reshape((NUM_AGENTS, num_envs, -1))
-    return {a: x[i].squeeze() for i, a in enumerate(AGENT_KEYS)}
+    return {a: x[i].at[0].get() for i, a in enumerate(AGENT_KEYS)}
 
 
 def linear_schedule(count, config):
@@ -55,7 +56,7 @@ def create_train_state(
 ) -> TrainState:
     tx = optax.chain(
         optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
-        optax.adam(learning_rate=linear_schedule, eps=1e-5),
+        optax.adam(learning_rate=partial(linear_schedule, config=config), eps=1e-5),
     )
     train_state = TrainState.create(
         apply_fn=module.apply,
@@ -94,9 +95,10 @@ def get_advantages(gae_and_next_value, transition, gamma, lmbd):
 
 
 def scan_adv(traj_batch, last_val, gamma, lmbd):
+    adv_calc = partial(get_advantages, gamma=gamma, lmbd=lmbd)
     _, advantages = jax.lax.scan(
-        get_advantages,
-        (jnp.zeros_like(last_val), last_val, gamma, lmbd),
+        adv_calc,
+        (jnp.zeros_like(last_val), last_val),
         traj_batch,
         reverse=True,
         unroll=16,
