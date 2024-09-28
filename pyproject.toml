@@ -1,0 +1,17 @@
+[project]
+name = "vg_lib"
+description = "Environment for AIJ Multiagent RL contest 2024"
+dynamic = ["version"]
+dependencies = []
+
+[build-system]
+requires = [
+    "setuptools>=61.0"
+]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["vg_lib"]
+
+[tool.setuptools.dynamic]
+version = { attr = "vg_lib.__version__" }
