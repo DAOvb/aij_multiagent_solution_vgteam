@@ -7,7 +7,7 @@ import flax.linen as nn
 NUM_AGENTS = 8
 AGENT_KEYS = [f'agent_{i}' for i in range(NUM_AGENTS)]
 AGENT_OBS_KEYS = ['proprio','image']
-CENTR_OBS_KEYS = ['image','wealth','has_resource','has_trash']
+CENTR_OBS_KEYS = ['wealth','has_resource','has_trash']
 AGENT_AREA_KEYS = ['ecology_score','num_trash','num_resource','dead_ecology']
 
 class Transition(NamedTuple):
@@ -28,7 +28,6 @@ def batchify(x: dict, num_actors):
 def unbatchify(x: jnp.ndarray, num_envs, num_actors):
     x = x.reshape((num_actors, num_envs, -1))
     return {a: x[i] for i, a in enumerate(AGENT_KEYS)}
-
 
 def linear_schedule(count, config):
         frac = (
