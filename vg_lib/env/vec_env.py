@@ -13,13 +13,13 @@ def worker_process(env_cls: Type[ParallelEnv], conn, env_idx, env_kwargs, seed):
     random.seed(unique_seed)
 
     env = env_cls(**env_kwargs)
-    conn.send(env.reset())  # Send the initial observation to the main process
 
     while True:
         cmd, data = conn.recv()
         if cmd == "step":
             actions = data
-            conn.send(env.step(actions))  # Send step results (obs, rewards, dones, etc.)
+            out = env.step(actions)
+            conn.send(out)  # Send step results (obs, rewards, dones, etc.)
         elif cmd == "reset":
             conn.send(env.reset())  # Send reset results
         elif cmd == "close":
