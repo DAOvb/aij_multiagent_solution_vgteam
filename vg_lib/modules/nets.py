@@ -13,7 +13,7 @@ class ConvEncoder(nn.Module):
   """Class defining the convolution model."""
 
   @nn.compact
-  def __call__(self, x, bdims=2):
+  def __call__(self, x):
     dtype = jnp.float32
     x = x.astype(dtype) / 255.
     x = nn.Conv(features=32, kernel_size=(8, 8), strides=(4, 4), name='conv1',
