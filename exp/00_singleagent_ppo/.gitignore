@@ -1,0 +1,4 @@
+*.mp4
+*.ipynb
+**/checkpoint_*/**
+events.out.tfevents*
