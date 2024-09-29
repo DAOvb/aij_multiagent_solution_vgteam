@@ -5,7 +5,7 @@ import numpy as np
 
 
 @jax.jit
-@functools.partial(jax.vmap, in_axes=(1, 1, 1, None, None), out_axes=1)
+# @functools.partial(jax.vmap, in_axes=(1, 1, 1, None, None), out_axes=1)
 def gae_advantages(
     rewards: np.ndarray,
     terminal_masks: np.ndarray,
