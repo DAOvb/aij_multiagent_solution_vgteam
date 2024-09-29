@@ -5,6 +5,8 @@ from flax.training.train_state import TrainState
 import optax
 import flax.linen as nn
 from functools import partial
+import pickle
+import flax 
 
 NUM_AGENTS = 8
 AGENT_KEYS = [f"agent_{i}" for i in range(NUM_AGENTS)]
@@ -24,7 +26,6 @@ class Transition(NamedTuple):
     obs_feats: jnp.ndarray
     world_image: jnp.ndarray
     world_feats: jnp.ndarray
-    # info: jnp.ndarray
 
 
 def batchify(x, key, config):
@@ -104,3 +105,10 @@ def scan_adv(traj_batch, last_val, gamma, lmbd):
         unroll=16,
     )
     return advantages, advantages + traj_batch.value
+
+def save_state(dir: str, filename: str, state: TrainState):
+    # pickling state dictionary. State has all information about current train state: weights, optimizer stats and current step
+    state_dict = flax.serialization.to_state_dict(state)
+    if dir:
+        with open(os.path.join(dir,filename + '.pickle'), 'wb') as handle:
+            pickle.dump(state_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)

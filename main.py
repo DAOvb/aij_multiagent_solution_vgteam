@@ -7,6 +7,8 @@ from vg_lib.modules import nets
 from vg_lib.utils.training import *
 from vg_lib.modules.loss import actor_loss_fn, critic_loss_fn
 from functools import partial
+import orbax.checkpoint as ocp
+import wandb
 # jax.config.update("jax_traceback_filtering", "off")
 
 
@@ -33,6 +35,8 @@ def make_train(config):
 
     A_LOSS_FN = partial(actor_loss_fn, clip_eps=config["CLIP_EPS"], ent_cf=config["ENT_COEF"])
     C_LOSS_FN = partial(critic_loss_fn, clip_eps=config["CLIP_EPS"], vf_cf=config["VF_COEF"])
+    # path = ocp.test_utils.erase_and_create_empty('/my-checkpoints/')
+    # checkpointer = ocp.StandardCheckpointer()
 
     def train(rng):
         # gather agent initial state
@@ -152,7 +156,6 @@ def make_train(config):
                     obs_p_batch,
                     world_image,
                     world_feats,
-                    # info,
                 )
                 runner_state = (
                     train_states,
@@ -286,25 +289,28 @@ def make_train(config):
             loss_info = jax.tree_util.tree_map(lambda x: x.mean(), loss_info)
 
             train_states = update_state[0]
-            # metric = traj_batch.info
-            metric["loss"] = loss_info
+            # metric = info
+            metric = loss_info
             rng = update_state[-1]
 
-            # def callback(metric):
+            def callback(metric):
 
-            #     wandb.log(
-            #         {
-            #             "returns": metric["returned_episode_returns"][-1, :].mean(),
-            #             "env_step": metric["update_steps"]
-            #             * config["NUM_ENVS"]
-            #             * config["NUM_STEPS"],
-            #             **metric["loss"],
-            #         }
-            #     )
+                wandb.log(
+                    {
+                        "returns": metric["returned_episode_returns"][-1, :].mean(),
+                        "env_step": metric["update_steps"]
+                        * config["NUM_ENVS"]
+                        * config["NUM_STEPS"],
+                        **metric["loss"],
+                    }
+                )
 
             metric["update_steps"] = update_steps
-            # jax.experimental.io_callback(callback, None, metric)
+            jax.experimental.io_callback(callback, None, metric)
             update_steps = update_steps + 1
+            if update_steps % config["EVAL_EVERY"] == 0:
+                # eval_metrics = evaluate_agent(train_states[0])
+                print('aboba')
             runner_state = (train_states, env_state, last_obs, last_done, hstates, rng)
             return (runner_state, update_steps), metric
 
@@ -318,30 +324,28 @@ def make_train(config):
             (ac_init_hstate, cr_init_hstate),
             _rng,
         )
-        # k = 0
-        # for i in range(config["NUM_UPDATES"]):
-        #     (runner_state,k) , metric = _update_step((runner_state, k), None)
         runner_state, metric = jax.lax.scan(
             _update_step, (runner_state, 0), None, config["NUM_UPDATES"]
         )
+        
         return {"runner_state": runner_state}
 
     return train
 
 
 def main():
-    with open("config.yaml") as stream:
+    with open("/mnt/vbogdanov/aij_multiagent_solution_vgteam/config.yaml") as stream:
         try:
             config = yaml.safe_load(stream)
         except yaml.YAMLError as exc:
             print(exc)
-    # wandb.init(
-    #     entity=config["ENTITY"],
-    #     project=config["PROJECT"],
-    #     tags=["MAPPO", "RNN", config["ENV_NAME"]],
-    #     config=config,
-    #     mode=config["WANDB_MODE"],
-    # )
+    wandb.init(
+        entity=config["ENTITY"],
+        project=config["PROJECT"],
+        tags=["MAPPO", "RNN", config["ENV_NAME"]],
+        config=config,
+        mode=config["WANDB_MODE"],
+    )
     rng = jax.random.PRNGKey(config["SEED"])
     with jax.disable_jit(True):
         train_jit = jax.jit(make_train(config))
