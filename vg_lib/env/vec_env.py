@@ -32,7 +32,13 @@ def worker_process(env_cls: Type[ParallelEnv], conn, env_idx, env_kwargs, seed):
 
 
 class VectorParallelEnv:
-    def __init__(self, env_cls: Type[ParallelEnv], num_envs: int, env_kwargs: Dict[str, Any] = None, seed: int = 0):
+    def __init__(
+        self,
+        env_cls: Type[ParallelEnv],
+        num_envs: int,
+        env_kwargs: Dict[str, Any] = None,
+        seed: int = 0,
+    ):
         self.env_cls = env_cls
         self.num_envs = num_envs
         self.env_kwargs = env_kwargs if env_kwargs is not None else {}
@@ -48,13 +54,15 @@ class VectorParallelEnv:
             self.worker_conns.append(child_conn)
             process = mp.Process(
                 target=worker_process,
-                args=(env_cls, child_conn, i, self.env_kwargs, seed)
+                args=(env_cls, child_conn, i, self.env_kwargs, seed),
             )
             process.daemon = True  # Ensure the process ends when the main process exits
             process.start()
             self.envs.append(process)
 
-    def step(self, actions: List[Dict[str, Any]]) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict], List[Dict]]:
+    def step(
+        self, actions: List[Dict[str, Any]]
+    ) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict], List[Dict]]:
         for conn, action in zip(self.conns, actions):
             conn.send(("step", action))
         results = [conn.recv() for conn in self.conns]
@@ -82,6 +90,14 @@ class VectorParallelEnv:
         for env in self.envs:
             env.join()
 
+
 # Utility function to create a vectorized environment
-def create_vec_env(env_cls: Type[ParallelEnv], num_envs: int, env_kwargs: Dict[str, Any] = None, seed: int = 0) -> VectorParallelEnv:
-    return VectorParallelEnv(env_cls=env_cls, num_envs=num_envs, env_kwargs=env_kwargs, seed=seed)
+def create_vec_env(
+    env_cls: Type[ParallelEnv],
+    num_envs: int,
+    env_kwargs: Dict[str, Any] = None,
+    seed: int = 0,
+) -> VectorParallelEnv:
+    return VectorParallelEnv(
+        env_cls=env_cls, num_envs=num_envs, env_kwargs=env_kwargs, seed=seed
+    )

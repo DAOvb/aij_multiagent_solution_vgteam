@@ -1,6 +1,6 @@
 import numpy as np
 from collections import deque
-from gym import Wrapper
+from gymnasium import Wrapper
 
 class FrameStack(Wrapper):
     def __init__(self, env, stack_size: int = 4, keys: list = ['image']):
