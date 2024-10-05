@@ -4,7 +4,7 @@ from gymnasium import Wrapper
 
 
 class FrameStack(Wrapper):
-    def __init__(self, env, stack_size: int = 4, keys: list = ["image"]):
+    def __init__(self, env, stack_size: int = 4, keys: list = ["image", "proprio"]):
         """FrameStack wrapper for multi-agent environments.
 
         Args:

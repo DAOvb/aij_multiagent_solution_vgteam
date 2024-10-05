@@ -20,7 +20,7 @@ from aij_multiagent_rl.agents import BaseAgent
 AGENT_KEYS = [f'agent_{i}' for i in range(8)]
 
 ExpTuple = collections.namedtuple(
-    "ExpTuple", ["state", "action", "reward", "value", "log_prob", "done"]
+    "ExpTuple", ["state", "action", "reward", "value", "log_prob", "done", "world_state"]
 )
 
 
@@ -33,9 +33,6 @@ class CentralCritic(nn.Module):
         x = inp["image"]
         p_x1, p_x2, p_x3 = inp["wealth"], inp["has_resource"], inp["has_trash"]
         p_x = jnp.concatenate([p_x1, p_x2, p_x3], -1)
-        x = einops.rearrange(
-            x, "bs stack height width channels -> bs height width (stack channels)"
-        )
         x = x.astype(dtype) / 255.0
         x = nn.Conv(
             features=32,
@@ -148,7 +145,6 @@ class TheFramestackPolicy(BaseAgent):
 
         collated = smart_collate(self.history)
         for key in self.framestack_keys:
-            # print(f'observation[key] {observation[key].shape} -> collated[key] {collated[key].shape}')
             observation[key] = collated[key]
 
         action, _, _ = policy_step(self.train_state, {self.name: observation}, self.key)
@@ -182,11 +178,12 @@ def critic_calc(apply_fn, params, observation):
     return out
 
 def critic_step(train_state: train_state.TrainState,
-    observation: dict["str", np.ndarray]):
-    model_output = critic_calc(train_state.apply_fn, train_state.params, observation)
+    observation: list[dict["str", np.ndarray]]):
+    observation = smart_collate(observation)
+    model_output = critic_calc(train_state.apply_fn, train_state.params, observation=observation)
     agent_values = {}
-    for key, value in zip(AGENT_KEYS, model_output):
-        agent_values[key] = value
+    for i, key in enumerate(AGENT_KEYS):
+        agent_values[key] = model_output[:, i]
     return agent_values
 
 def policy_step(
@@ -217,7 +214,7 @@ def policy_step(
     agent_acts = {}
     agent_logprobs = {}
 
-    for agent, a, lp, v in zip(keys, actions, log_probabilities):
+    for agent, a, lp in zip(keys, actions, log_probabilities):
         agent_acts[agent] = a.item()
         agent_logprobs[agent] = lp[a]
 
@@ -244,7 +241,7 @@ def get_experience(
     """
     # Reset environments and get initial states
     obs, _ = list(zip(*env.reset()))
-    world_states = list(zip(*env.state()))
+    world_states = env.state()
     num_envs = len(obs)
 
     # Prepare all thread experiences
@@ -265,13 +262,11 @@ def get_experience(
             action, log_prob = policy_step(train_state, observation, keys[i])
             actions.append(action)
             log_probs.append(log_prob)
-        for world_state in world_states:
-            value = critic_step(critic_train_state, world_state)
-            values.append({k: v[..., 0] for k, v in value.items()})
+        value = critic_step(critic_train_state, world_states)
+        values.extend([{k:v[i] for k, v in value.items()} for i in range(num_envs)])
 
         # Take a step in all environments using the computed actions
         new_obs, rewards, dones, truncs, infos = env.step(actions)
-        world_state = env.state()
 
         # Collect experience tuples for each environment
         for i in range(num_envs):
@@ -282,11 +277,13 @@ def get_experience(
                 value=values[i],  # Value estimate for the current state
                 log_prob=log_probs[i],  # Log probability of the chosen action
                 done=dones[i],  # Whether the episode has ended
+                world_state=world_states[i],
             )
             # Save the experience tuple for the i-th environment
             all_experiences[i].append(exp_tuple)
-
+        
         # Move onto the next observations (new state after step)
+        world_states = env.state()
         obs = new_obs
 
         # Update random keys for the next step
@@ -304,32 +301,95 @@ def process_experience(
     possible_agent_names = [f"agent_{i}" for i in range(8)]
 
     trajectories = []
-
+    agent_returns = []
+    agent_values = []
     for agent_name in possible_agent_names:
+        agent_trajectory = []
+        agent_rets = []
+        agent_v = []
         for env_i in range(num_envs):
             env_experience = experience[env_i]
             agent_obs = smart_collate(
                 [x.state[agent_name] for x in env_experience[:-1]]
             )
+            
             agent_act = smart_collate(
                 [x.action[agent_name] for x in env_experience[:-1]]
             )
+            
             agent_reward = smart_collate(
                 [x.reward[agent_name] for x in env_experience[:-1]]
             )
+            
             agent_value = smart_collate([x.value[agent_name] for x in env_experience])
+            
             agent_logprob = smart_collate(
                 [x.log_prob[agent_name] for x in env_experience[:-1]]
             )
+            
             agent_done = smart_collate(
                 [x.done[agent_name] for x in env_experience[:-1]]
             )
+            
             agent_advantages = gae_advantages(
                 agent_reward, agent_done, agent_value, gamma, lambda_
             )
-            agent_returns = agent_advantages + agent_value[:-1]
-            trajectories.append(
-                (agent_obs, agent_act, agent_logprob, agent_returns, agent_advantages)
+            agent_trajectory.append(
+                (agent_obs, agent_act, agent_logprob, agent_advantages)
             )
+            
+            agent_return = agent_advantages + agent_value[:-1]
+            
+            agent_rets.append(agent_return)
+            agent_v.append(agent_value[:-1])
+        agent_returns.append(smart_concat(agent_rets))
+        agent_values.append(smart_concat(agent_v))
+        trajectories.append(tuple(smart_concat(x) for x in zip(*agent_trajectory)))
+    world_states = []
+    for env_i in range(num_envs):
+        world_states.append(smart_collate([x.world_state for x in experience[env_i][:-1]]))
+    world_states = smart_concat(world_states)
+    world_traj = (world_states, jnp.stack(agent_returns,1), jnp.stack(agent_values,1))
+    trajectories = tuple(smart_collate(x) for x in zip(*trajectories))
+    return trajectories, world_traj
+
+
+def process_experience(
+        experience: tp.List[tp.List[ExpTuple]],
+        gamma: float = 0.99,
+        lambda_: float = 0.95,
+    ):
+    num_envs = len(experience)
+    possible_agent_names = [f"agent_{i}" for i in range(8)]
+
+    trajectories = []
+    ag_vals = []
+    ag_r = []
+    for agent_name in possible_agent_names:
+        agent_rets = []
+        agent_v = []
+        for env_i in range(num_envs):
+            env_experience = experience[env_i]
+            agent_obs = smart_collate([x.state[agent_name] for x in env_experience[:-1]])
+            agent_act = smart_collate([x.action[agent_name] for x in env_experience[:-1]])
+            agent_reward = smart_collate([x.reward[agent_name] for x in env_experience[:-1]])
+            agent_value = smart_collate([x.value[agent_name] for x in env_experience])
+            agent_logprob = smart_collate([x.log_prob[agent_name] for x in env_experience[:-1]])
+            agent_done = smart_collate([x.done[agent_name] for x in env_experience[:-1]])
+            agent_advantages = gae_advantages(agent_reward, agent_done, agent_value, gamma, lambda_)
+            
+            trajectories.append((agent_obs, agent_act, agent_logprob, agent_advantages))
+            
+            agent_returns = agent_advantages + agent_value[:-1]
+            agent_rets.append(agent_returns)
+            agent_v.append(agent_value[:-1])
+        ag_r.append(smart_concat(agent_rets))
+        ag_vals.append(smart_concat(agent_v))
     trajectories = tuple(smart_concat(x) for x in zip(*trajectories))
-    return trajectories
+    
+    world_states = []
+    for env_i in range(num_envs):
+        world_states.append(smart_collate([x.world_state for x in experience[env_i][:-1]]))
+    world_states = smart_concat(world_states)
+    world_traj = (world_states, jnp.stack(ag_r,1), jnp.stack(ag_vals,1))
+    return trajectories, world_traj

@@ -9,7 +9,7 @@ import ml_collections
 import numpy as np
 import optax
 from absl import logging
-from agent import policy_action
+from agent import policy_action, critic_calc
 from flax import linen as nn
 from flax.metrics import tensorboard
 from flax.training import checkpoints, train_state
@@ -17,13 +17,32 @@ from tqdm import tqdm
 from agent import get_experience, process_experience
 from env import make_training_env
 
-
-def loss_fn(
-    params: flax.core.FrozenDict,
-    apply_fn: Callable[..., Any],
+def critic_loss_fn(
+    critic_params: flax.core.FrozenDict,
+    critic_apply_fn: Callable[..., Any],
     minibatch: tuple,
     clip_param: float,
     vf_coeff: float,
+):
+    """Evaluate the loss function.
+
+    Compute loss as a sum of three components: the negative of the PPO clipped
+    surrogate objective, the value function loss and the negative of the entropy
+    bonus.
+    """
+    world_state, returns, batch_values = minibatch
+    value = critic_calc(critic_apply_fn, critic_params, world_state)
+    v_clip = batch_values + jax.lax.clamp(-clip_param, (value - batch_values), clip_param)
+    vf1 = jnp.square(returns - value)
+    vf2 = jnp.square(returns - v_clip)
+    vf_loss = jnp.maximum(vf1, vf2)
+    return vf_coeff * jnp.mean(vf_loss)
+
+def policy_loss_fn(
+    actor_params: flax.core.FrozenDict,
+    actor_apply_fn: Callable[..., Any],
+    minibatch: tuple,
+    clip_param: float,
     entropy_coeff: float,
 ):
     """Evaluate the loss function.
@@ -48,13 +67,11 @@ def loss_fn(
     Returns:
         loss: the PPO loss, scalar quantity
     """
-    states, actions, old_log_probs, returns, advantages = minibatch
-
-    log_probs, values = policy_action(apply_fn, params, states)
-    values = values[:, 0]  # Convert shapes: (batch, 1) to (batch, ).
+    states, actions, old_log_probs, advantages = minibatch
+    
+    log_probs = policy_action(actor_apply_fn, actor_params, states)
     probs = jnp.exp(log_probs)
 
-    value_loss = jnp.mean(jnp.square(returns - values), axis=0)
     entropy = jnp.sum(-probs * log_probs, axis=1).mean()
 
     log_probs_act_taken = jax.vmap(lambda lp, a: lp[a])(log_probs, actions)
@@ -68,13 +85,15 @@ def loss_fn(
     )
     ppo_loss = -jnp.mean(jnp.minimum(pg_loss, clipped_loss), axis=0)
 
-    return ppo_loss + vf_coeff * value_loss - entropy_coeff * entropy
+    return ppo_loss - entropy_coeff * entropy
 
 
-@functools.partial(jax.jit, static_argnums=(2,))
+@functools.partial(jax.jit, static_argnums=(4,))
 def train_step(
     state: train_state.TrainState,
+    critic_state: train_state.TrainState,
     trajectories: tuple,
+    world_traj: tuple,
     batch_size: int,
     *,
     clip_param: float,
@@ -107,16 +126,30 @@ def train_step(
     trajectories = jax.tree_util.tree_map(
         lambda x: x.reshape((iterations, batch_size) + x.shape[1:]), trajectories
     )
-    loss = 0.0
+    world_traj = jax.tree_util.tree_map(
+        lambda x: x.reshape((iterations, batch_size // 8) + x.shape[1:]), world_traj
+    )
+    policy_loss, value_loss = 0.0, 0.0
     for batch_i in tqdm(range(iterations)):
         batch = jax.tree_util.tree_map(lambda x: x[batch_i], trajectories)
-        grad_fn = jax.value_and_grad(loss_fn)
-        l, grads = grad_fn(
-            state.params, state.apply_fn, batch, clip_param, vf_coeff, entropy_coeff
+        world_batch = jax.tree_util.tree_map(lambda x: x[batch_i], world_traj)
+        #update actor
+        policy_grad_fn = jax.value_and_grad(policy_loss_fn)
+        pl, pgrads = policy_grad_fn(
+            state.params, state.apply_fn, batch, clip_param, entropy_coeff
         )
-        loss += l
-        state = state.apply_gradients(grads=grads)
-    return state, loss
+        policy_loss += pl
+        state = state.apply_gradients(grads=pgrads)
+        #update critic
+        value_grad_fn = jax.value_and_grad(critic_loss_fn)
+        vl, vgrads = value_grad_fn(
+            critic_state.params, critic_state.apply_fn, world_batch, clip_param, vf_coeff
+        )
+        value_loss += vl
+        critic_state = critic_state.apply_gradients(grads=vgrads)
+        
+        
+    return state, critic_state, policy_loss, value_loss
 
 
 def create_train_state(
@@ -140,14 +173,14 @@ def create_train_state(
 
 @functools.partial(jax.jit, static_argnums=1)
 def get_initial_actor_params(key: jax.Array, model: nn.Module):
-    init_batch = {"image": jnp.ones((1, 4, 60, 60, 3), jnp.float32), "proprio": jnp.ones((1,4,7))}
+    init_batch = {"image": jnp.ones((1, 4, 60, 60, 3), jnp.float32), "proprio": jnp.ones((1,4,7), jnp.float32)}
     initial_params = model.init(key, init_batch)["params"]
     return initial_params
 
 @functools.partial(jax.jit, static_argnums=1)
 def get_initial_critic_params(key: jax.Array, model: nn.Module):
-    init_batch = {"image": jnp.ones((1, 4, 110, 110, 3), jnp.float32), "wealth": jnp.zeros((1,4,8), jnp.float32), 
-                  "has_resource": jnp.zeros((1,4,8), jnp.float32), "has_trash":jnp.zeros((1,4,8), jnp.float32)}
+    init_batch = {"image": jnp.ones((4, 110, 110, 3), jnp.float32), "wealth": jnp.zeros((4,8), jnp.float32), 
+                  "has_resource": jnp.zeros((4,8), jnp.float32), "has_trash":jnp.zeros((4,8), jnp.float32)}
     initial_params = model.init(key, init_batch)["params"]
     return initial_params
 
@@ -198,8 +231,8 @@ def train(
     )
     del initial_params
     del c_initial_params
-    state = checkpoints.restore_checkpoint(model_dir + "a", state)
-    critic_state = checkpoints.restore_checkpoint(model_dir + "c", critic_state)
+    state = checkpoints.restore_checkpoint(model_dir + "/a", state)
+    critic_state = checkpoints.restore_checkpoint(model_dir + "/c", critic_state)
     # number of train iterations done by each train_step
 
     start_step = int(state.step) // config.num_epochs // iterations_per_step + 1
@@ -226,28 +259,37 @@ def train(
             state, critic_state, simulators, config.actor_steps, key
         )
         key, _ = jax.random.split(key)
-        trajectories = process_experience(
+        trajectories, world_trajectories = process_experience(
             all_experiences,
             config.gamma,
             config.lambda_,
         )
+
         clip_param = config.clip_param * alpha
         for _ in tqdm(range(config.num_epochs), desc="Train Epochs"):
             permutation = np.random.permutation(trajectories[1].shape[0])
             trajectories = jax.tree_util.tree_map(
                 lambda x: x[permutation], trajectories
             )
-            state, _ = train_step(
-                state,
-                trajectories,
-                config.batch_size,
+            w_permutation = np.random.permutation(world_trajectories[1].shape[0])
+            world_trajectories = jax.tree_util.tree_map(
+                lambda x: x[w_permutation], world_trajectories
+            )
+            state, critic_state, policy_loss, value_loss = train_step(
+                state=state,
+                critic_state=critic_state,
+                trajectories=trajectories,
+                world_traj=world_trajectories,
+                batch_size=config.batch_size,
                 clip_param=clip_param,
                 vf_coeff=config.vf_coeff,
                 entropy_coeff=config.entropy_coeff,
             )
+            summary_writer.scalar('pg_loss', policy_loss, step)
+            summary_writer.scalar('critic_loss', value_loss, step)
         if (step + 1) % checkpoint_frequency == 0:
             print(f"saved checkpoint on step {step + 1}!")
-            checkpoints.save_checkpoint(model_dir + "a", state, step + 1)
-            checkpoints.save_checkpoint(model_dir + "c", state, step + 1)
+            checkpoints.save_checkpoint(model_dir + "/a", state, step + 1)
+            checkpoints.save_checkpoint(model_dir + "/c", state, step + 1)
 
     return state

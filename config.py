@@ -58,4 +58,3 @@ def get_config():
 
 
     return config
-

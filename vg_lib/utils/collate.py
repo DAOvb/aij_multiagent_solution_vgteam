@@ -2,7 +2,7 @@ from typing import List, Any
 import numpy as np
 
 
-def smart_collate(batch: List[Any]) -> Any:
+def smart_collate(batch: List[Any], axis = 0) -> Any:
     """
     Recursively collates a batch of data from a vectorized environment into batches.
 
@@ -29,7 +29,7 @@ def smart_collate(batch: List[Any]) -> Any:
     # Handle a list of scalars or arrays
     else:
         # If everything is a numpy array or scalar, use np.stack
-        return np.stack(batch)
+        return np.stack(batch, axis = axis)
 
 
 def smart_concat(batch: List[Any], axis: int =0) -> Any:
@@ -59,4 +59,4 @@ def smart_concat(batch: List[Any], axis: int =0) -> Any:
     # Handle a list of scalars or arrays
     else:
         # If everything is a numpy array or scalar, use np.stack
-        return np.concatenate(batch, axis=0)
+        return np.concatenate(batch, axis=axis)
