@@ -1,4 +1,3 @@
-
 import functools
 from collections.abc import Callable
 from typing import Any, Dict
@@ -69,7 +68,6 @@ def loss_fn(
     )
     ppo_loss = -jnp.mean(jnp.minimum(pg_loss, clipped_loss), axis=0)
 
-
     return ppo_loss + vf_coeff * value_loss - entropy_coeff * entropy
 
 
@@ -111,9 +109,7 @@ def train_step(
     )
     loss = 0.0
     for batch_i in tqdm(range(iterations)):
-        batch = jax.tree_util.tree_map(
-            lambda x: x[batch_i], trajectories
-        )
+        batch = jax.tree_util.tree_map(lambda x: x[batch_i], trajectories)
         grad_fn = jax.value_and_grad(loss_fn)
         l, grads = grad_fn(
             state.params, state.apply_fn, batch, clip_param, vf_coeff, entropy_coeff
@@ -138,24 +134,23 @@ def create_train_state(
     else:
         lr = config.learning_rate
     tx = optax.adam(lr)
-    state = train_state.TrainState.create(
-        apply_fn=model.apply, params=params, tx=tx
-    )
+    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
     return state
-
 
 
 @functools.partial(jax.jit, static_argnums=1)
 def get_initial_params(key: jax.Array, model: nn.Module):
-  init_batch= {'image': jnp.ones((1, 4, 60, 60, 3) , jnp.float32)}
-  initial_params = model.init(key, init_batch)['params']
-  return initial_params
-
+    init_batch = {"image": jnp.ones((1, 4, 60, 60, 3), jnp.float32)}
+    initial_params = model.init(key, init_batch)["params"]
+    return initial_params
 
 
 def train(
-    model, config: ml_collections.ConfigDict, model_dir: str,
-    eval_train_state_fn: Callable[[train_state.TrainState], Dict[str, float]]
+    model,
+    critic_model,
+    config: ml_collections.ConfigDict,
+    model_dir: str,
+    eval_train_state_fn: Callable[[train_state.TrainState], Dict[str, float]],
 ):
     """Main training loop.
 
@@ -182,18 +177,27 @@ def train(
     )
 
     initial_params = get_initial_params(jax.random.key(0), model)
+    c_initial_params = get_initial_params(jax.random.key(0), critic_model)
     state = create_train_state(
         initial_params,
         model,
         config,
         loop_steps * config.num_epochs * iterations_per_step,
     )
+    critic_state = create_train_state(
+        c_initial_params,
+        critic_model,
+        config,
+        loop_steps * config.num_epochs * iterations_per_step,
+    )
     del initial_params
-    state = checkpoints.restore_checkpoint(model_dir, state)
+    del c_initial_params
+    state = checkpoints.restore_checkpoint(model_dir + "a", state)
+    critic_state = checkpoints.restore_checkpoint(model_dir + "c", critic_state)
     # number of train iterations done by each train_step
 
     start_step = int(state.step) // config.num_epochs // iterations_per_step + 1
-    logging.info('Start training from step: %s', start_step)
+    logging.info("Start training from step: %s", start_step)
 
     key = jax.random.key(0)
     for step in range(start_step, loop_steps):
@@ -204,14 +208,17 @@ def train(
             for k, v in eval_result.items():
                 summary_writer.scalar(k, v, frames)
             logging.info(
-                'Step %s:\nframes seen %s\nscore %s\n\n', step, frames, eval_result['score']
+                "Step %s:\nframes seen %s\nscore %s\n\n",
+                step,
+                frames,
+                eval_result["score"],
             )
 
         # Core training code.
-        alpha = (
-            1.0 - step / loop_steps if config.decaying_lr_and_clip_param else 1.0
+        alpha = 1.0 - step / loop_steps if config.decaying_lr_and_clip_param else 1.0
+        all_experiences = get_experience(
+            state, critic_state, simulators, config.actor_steps, key
         )
-        all_experiences = get_experience(state, simulators, config.actor_steps, key)
         key, _ = jax.random.split(key)
         trajectories = process_experience(
             all_experiences,
@@ -220,9 +227,7 @@ def train(
         )
         clip_param = config.clip_param * alpha
         for _ in tqdm(range(config.num_epochs), desc="Train Epochs"):
-            permutation =np.random.permutation(
-                trajectories[1].shape[0]
-            )
+            permutation = np.random.permutation(trajectories[1].shape[0])
             trajectories = jax.tree_util.tree_map(
                 lambda x: x[permutation], trajectories
             )
@@ -235,8 +240,8 @@ def train(
                 entropy_coeff=config.entropy_coeff,
             )
         if (step + 1) % checkpoint_frequency == 0:
-            print(f'saved checkpoint on step {step + 1}!')
-            checkpoints.save_checkpoint(model_dir, state, step + 1)
+            print(f"saved checkpoint on step {step + 1}!")
+            checkpoints.save_checkpoint(model_dir + "a", state, step + 1)
+            checkpoints.save_checkpoint(model_dir + "c", state, step + 1)
 
     return state
-

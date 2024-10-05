@@ -1,9 +1,10 @@
 import numpy as np
 from collections import deque
-from gym import Wrapper
+from gymnasium import Wrapper
+
 
 class FrameStack(Wrapper):
-    def __init__(self, env, stack_size: int = 4, keys: list = ['image']):
+    def __init__(self, env, stack_size: int = 4, keys: list = ["image"]):
         """FrameStack wrapper for multi-agent environments.
 
         Args:
@@ -14,7 +15,10 @@ class FrameStack(Wrapper):
         super(FrameStack, self).__init__(env)
         self.stack_size = stack_size
         self.keys = keys
-        self.frames = {key: {agent: deque(maxlen=stack_size) for agent in env.agents} for key in keys}
+        self.frames = {
+            key: {agent: deque(maxlen=stack_size) for agent in env.agents}
+            for key in keys
+        }
 
     def reset(self, **kwargs):
         for k in self.frames:
