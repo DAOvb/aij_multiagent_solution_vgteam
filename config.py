@@ -26,7 +26,7 @@ def get_config():
     """
     config = ml_collections.ConfigDict()
     # Total number of frames seen during training.
-    config.total_frames = 40000000
+    config.total_frames = 40_000_000
     # The learning rate for the Adam optimizer.
     config.learning_rate = 2.5e-4
     # Batch size used in training.
@@ -42,9 +42,9 @@ def get_config():
     # Generalized Advantage Estimation parameter.
     config.lambda_ = 0.95
     # The PPO clipping parameter used to clamp ratios in loss function.
-    config.clip_param = 0.1
+    config.clip_param = 0.2
     # Weight of value function loss in the total loss.
-    config.vf_coeff = 0.5
+    config.vf_coeff = 8.
     # Weight of entropy bonus in the total loss.
     config.entropy_coeff = 0.01
     # Linearly decay learning rate and clipping parameter to zero during

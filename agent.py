@@ -122,7 +122,7 @@ class TheFramestackPolicy(BaseAgent):
         self,
         train_state: train_state.TrainState,
         framestack_len: int = 4,
-        framestack_keys=["image"],
+        framestack_keys=["image", "proprio"],
         name="agent_0",
     ):
         self.train_state = train_state
@@ -146,8 +146,7 @@ class TheFramestackPolicy(BaseAgent):
         collated = smart_collate(self.history)
         for key in self.framestack_keys:
             observation[key] = collated[key]
-
-        action, _, _ = policy_step(self.train_state, {self.name: observation}, self.key)
+        action, _ = policy_step(self.train_state, {self.name: observation}, self.key)
         self.key, _ = jax.random.split(self.key)
         return action[self.name]
 

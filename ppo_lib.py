@@ -203,7 +203,9 @@ def train(
     """
 
     simulators = make_training_env()
-    summary_writer = tensorboard.SummaryWriter(model_dir)
+    log_dir = model_dir + '/logs'
+    summary_writer = tensorboard.SummaryWriter(log_dir)
+    print(f'Train is Launched, model dir for TB logs and checkpoints are: {log_dir}')
     summary_writer.hparams(dict(config))
     loop_steps = config.total_frames // (config.num_agents * config.actor_steps)
     log_frequency = config.eval_frequency
