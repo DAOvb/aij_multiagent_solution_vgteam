@@ -58,6 +58,7 @@ class DeterministicAgent(BaseAgent):
         self.reset_state()
 
     def reset_state(self) -> None:
+        self.flag = True
         self.action_queue = deque()
         self.garbage_loc = None
         self.fabric_loc = None
@@ -178,6 +179,12 @@ class DeterministicAgent(BaseAgent):
             'PICKUP_RESOURCE',
             'DROP_RESOURCE')
         return path
+
+    def go_to_fabric(self, observation):
+        to_fabric = self.get_vector_to_fabric(observation['proprio'])[0]
+        path, cur_rotate = self.path_to_go(to_fabric[0], to_fabric[1])
+        return path
+
         
     def get_actions_trash2garbage(self, observation):
         found_trash = self.find_trash(observation['image'])
@@ -241,19 +248,26 @@ class DeterministicAgent(BaseAgent):
         if len(self.action_queue) > 0:
             return self.action_queue.popleft()
         
-        path = self.get_actions_trash2garbage(observation)
-        if path:
-            for act in path:
-                self.action_queue.append(act)
-            return self.action_queue.popleft()
-
-        path = self.get_actions_star2fabric(observation)
-        if path:
+        if self.flag:
+            path = self.go_to_fabric(observation)
+            self.flag = False
             for act in path:
                 self.action_queue.append(act)
             return self.action_queue.popleft()
         
-        return np.random.randint(0, 2)
+        # path = self.get_actions_trash2garbage(observation)
+        # if path:
+        #     for act in path:
+        #         self.action_queue.append(act)
+        #     return self.action_queue.popleft()
+
+        # path = self.get_actions_star2fabric(observation)
+        # if path:
+        #     for act in path:
+        #         self.action_queue.append(act)
+        #     return self.action_queue.popleft()
+        
+        return 2
 
 
 
@@ -275,6 +289,7 @@ class ConstAgent(BaseAgent):
             "DROP_TRASH",
             "NOOP"], range(1, action_dim + 1)))
         self.const_action = const_action
+        self.action_queue = deque()
         self.reset_state()
 
     def load(self, ckpt_dir: str) -> None:
@@ -286,4 +301,5 @@ class ConstAgent(BaseAgent):
         return self.const_action
 
     def reset_state(self) -> None:
-        self.action_queue = deque()
+        pass
+        # self.action_queue = deque()
