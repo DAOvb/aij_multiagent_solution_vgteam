@@ -13,7 +13,8 @@ def sample_rollouts(
     n_rollouts: int,
     env: AijMultiagentEnv,
     agents: Dict[str, BaseAgent],
-    video_path: Optional[str] = None
+    video_path: Optional[str] = None,
+    max_n_steps: int = 1000
 ) -> Tuple[List[List[Dict[str, Any]]], float]:
     rollouts = []
     action_times = 0
@@ -30,7 +31,7 @@ def sample_rollouts(
         observations, infos = env.reset()
         done = False
 
-        with tqdm(total=1000, desc=f'eval rollout {i_rollout}') as pbar:
+        with tqdm(total=max_n_steps, desc=f'eval rollout {i_rollout}') as pbar:
             while not done:
                 start = time.perf_counter()
                 actions = {name: agent.get_action(observation=observations[name])
@@ -105,11 +106,13 @@ def compute_average_cumulative_reward(rollouts: List[List[Dict[str, Any]]], agen
 def compute_score_from_env(
         n_rollouts: int,
         agents: Dict[str, BaseAgent],
-        video_path: Optional[str] = None
+        video_path: Optional[str] = None,
+        make_env_fn = AijMultiagentEnv,
+        max_n_steps = 1000
         ) -> float:
+    env = make_env_fn()
     # Sample rollouts from the environment with the agents
-    env = AijMultiagentEnv()
-    rollouts, action_time = sample_rollouts(n_rollouts, env, agents, video_path)
+    rollouts, action_time = sample_rollouts(n_rollouts, env, agents, video_path, max_n_steps)
 
     # Compute the average cumulative reward per agent from the rollouts
     average_reward = compute_average_cumulative_reward(rollouts, agents)
