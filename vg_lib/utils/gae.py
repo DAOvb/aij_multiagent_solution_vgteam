@@ -36,6 +36,7 @@ def gae_advantages(
   )
   advantages = []
   gae = 0.0
+  terminal_masks = 1.0 - terminal_masks
   for t in reversed(range(len(rewards))):
     # Masks used to set next state value to 0 for terminal states.
     value_diff = discount * values[t + 1] * terminal_masks[t] - values[t]

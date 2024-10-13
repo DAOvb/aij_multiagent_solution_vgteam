@@ -208,7 +208,9 @@ def policy_step(
     # model_output = train_state.apply_fn({'params': train_state.params}, obs_batched)
     model_output = policy_action(train_state.apply_fn, train_state.params, obs_batched)
     log_probabilities = model_output
-    actions = jax.random.categorical(rng_key, log_probabilities)
+    rng_keys = jax.random.split(rng_key, 8)
+    actions = jnp.stack([jax.random.categorical(rng_keys[i], log_probabilities[i]) for i in range(8)])
+    # actions = jax.random.categorical(rng_key, log_probabilities)
 
     agent_acts = {}
     agent_logprobs = {}
@@ -266,6 +268,7 @@ def get_experience(
 
         # Take a step in all environments using the computed actions
         new_obs, rewards, dones, truncs, infos = env.step(actions)
+        dones = np.logical_or(dones, truncs)
 
         # Collect experience tuples for each environment
         for i in range(num_envs):
