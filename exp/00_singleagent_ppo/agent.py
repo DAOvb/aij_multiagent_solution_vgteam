@@ -23,17 +23,60 @@ ExpTuple = collections.namedtuple(
     'ExpTuple', ['state', 'action', 'reward', 'value', 'log_prob', 'done']
 )
 
+
+def encode_fourier_features(value, num_frequencies=8):
+    """
+    Encodes a scalar value into Fourier features.
+
+    Args:
+        value: The scalar value to encode.
+        num_frequencies: The number of frequency components to use.
+
+    Returns:
+        A 1D JAX array of Fourier features.
+    """
+    frequencies = jnp.arange(1, num_frequencies + 1)
+    angles = 2 * jnp.pi * value * frequencies / 8
+    sin_features = jnp.sin(angles)
+    cos_features = jnp.cos(angles)
+    return jnp.concatenate([sin_features, cos_features])
+
+@functools.partial(jax.vmap, in_axes=(0,), out_axes=0)
+def process_vector(vector):
+    """
+    Processes the input vector by removing the first element,
+    encoding it with Fourier features, and concatenating the result.
+
+    Args:
+        vector: A 1D JAX array.
+
+    Returns:
+        A 1D JAX array with the Fourier features concatenated to the remaining elements.
+    """
+    # Remove the first element
+    first_element = vector[0]
+    remaining_vector = vector[1:]
+
+    # Encode the first element with Fourier features
+    fourier_encoded = encode_fourier_features(first_element)
+
+    # Concatenate the Fourier features with the remaining vector
+    result_vector = jnp.concatenate([fourier_encoded, remaining_vector])
+
+    return result_vector
+
 class ActorCritic(nn.Module):
     """Model."""
 
     num_outputs: int
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, input):
         dtype = jnp.float32
-        x = x['image']
+        x = input['image'].astype(dtype) / 255.0
         x = einops.rearrange(x, 'bs stack height width channels -> bs height width (stack channels)')
-        x = x.astype(dtype) / 255.0
+        p_x = input["proprio"]
+        p_x = process_vector(p_x)
         x = nn.Conv(
             features=32,
             kernel_size=(8, 8),
@@ -59,6 +102,7 @@ class ActorCritic(nn.Module):
         )(x)
         x = nn.relu(x)
         x = x.reshape((x.shape[0], -1))  # flatten
+        x = jnp.concatenate([p_x, x], -1)
         x = nn.Dense(features=512, name='hidden', dtype=dtype)(x)
         x = nn.relu(x)
         logits = nn.Dense(features=self.num_outputs, name='logits', dtype=dtype)(x)
@@ -94,10 +138,9 @@ class TheFramestackPolicy(BaseAgent):
 
         collated = smart_collate(self.history)
         for key in self.framestack_keys:
-            # print(f'observation[key] {observation[key].shape} -> collated[key] {collated[key].shape}')
             observation[key] = collated[key]
 
-        action, _, _ = policy_step(self.train_state, {self.name: observation}, self.key)
+        action, _, _ = policy_step(self.train_state, {self.name: observation}, self.key, deterministic=False)
         self.key, _ = jax.random.split(self.key)
         return action[self.name]
 
@@ -111,8 +154,9 @@ def _policy_action(
     apply_fn: Callable[..., Any],
     params: flax.core.frozen_dict.FrozenDict,
     state: np.ndarray,
+    proprio: np.ndarray,
 ):
-    out = apply_fn({'params': params}, {'image': state})
+    out = apply_fn({'params': params}, {'image': state, 'proprio': proprio})
     return out
 
 def policy_action(
@@ -120,12 +164,16 @@ def policy_action(
     params: flax.core.frozen_dict.FrozenDict,
     observation,
 ):
-    out = _policy_action(apply_fn, params, observation['image'])
+    out = _policy_action(apply_fn, params, observation['image'], observation['proprio'])
     return out
 
 
 
-def policy_step(train_state: train_state.TrainState, observation: np.ndarray, rng_key: jax.random.PRNGKey):
+def policy_step(
+        train_state: train_state.TrainState,
+        observation: np.ndarray,
+        rng_key: jax.random.PRNGKey,
+        deterministic: bool = False):
     """
     given an observation per agent makes a model's forward pass
     """
@@ -144,7 +192,10 @@ def policy_step(train_state: train_state.TrainState, observation: np.ndarray, rn
     # model_output = train_state.apply_fn({'params': train_state.params}, obs_batched)
     model_output = policy_action(train_state.apply_fn, train_state.params, obs_batched)
     log_probabilities, values = model_output
-    actions = jax.random.categorical(rng_key, log_probabilities)
+    if deterministic:
+        actions = jnp.argmax(log_probabilities, -1)
+    else:
+        actions = jax.random.categorical(rng_key, log_probabilities)
 
     agent_acts = {}
     agent_logprobs = {}
@@ -197,9 +248,9 @@ def get_experience(train_state: train_state.TrainState, env, num_steps: int, rng
             values.append({k: v[..., 0] for k, v in value.items()})
 
         # Take a step in all environments using the computed actions
-        new_obs, rewards, dones, truncs, infos = env.step(actions)
+        new_obs, rewards, terminations, truncs, infos = env.step(actions)
 
-        # Collect experience tuples for each environment
+        dones = [{k:tm[k] or tr[k]  for k in tm.keys()} for tm, tr in zip(terminations, truncs)]
         for i in range(num_envs):
             exp_tuple = ExpTuple(
                 state=obs[i],             # The current state
@@ -216,8 +267,10 @@ def get_experience(train_state: train_state.TrainState, env, num_steps: int, rng
         obs = new_obs
 
         # Update random keys for the next step
-        keys = jax.random.split(rng_key, num_envs)
+        keys = jax.random.split(keys[0], num_envs)
 
+    print("MEAN TRAIN NONZERO REWARDS", np.mean([v for tr in all_experiences for x in tr for v in x.reward.values() if v != 0]))
+    print("MEAN TRAIN NONZERO LOGITS", np.mean([v for tr in all_experiences for x in tr for v in x.log_prob.values() if v != 0]))
     return all_experiences
 
 
@@ -239,10 +292,11 @@ def process_experience(
             agent_reward = smart_collate([x.reward[agent_name] for x in env_experience[:-1]])
             agent_value = smart_collate([x.value[agent_name] for x in env_experience])
             agent_logprob = smart_collate([x.log_prob[agent_name] for x in env_experience[:-1]])
-            agent_done = smart_collate([x.done[agent_name] for x in env_experience[:-1]])
+            agent_done = ~smart_collate([x.done[agent_name] for x in env_experience[:-1]])
             agent_advantages = gae_advantages(agent_reward, agent_done, agent_value, gamma, lambda_)
             agent_returns = agent_advantages + agent_value[:-1]
             trajectories.append((agent_obs, agent_act, agent_logprob, agent_returns, agent_advantages))
+
     trajectories = tuple(smart_concat(x) for x in zip(*trajectories))
     return trajectories
 

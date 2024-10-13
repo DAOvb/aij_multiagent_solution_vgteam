@@ -30,11 +30,11 @@ def get_config():
     # The learning rate for the Adam optimizer.
     config.learning_rate = 2.5e-4
     # Batch size used in training.
-    config.batch_size = 512
+    config.batch_size = 1024
     # Number of agents playing in parallel.
     config.num_agents = 4
     # Number of steps each agent performs in one policy unroll.
-    config.actor_steps = 256
+    config.actor_steps = 512
     # Number of training epochs per each unroll of the policy.
     config.num_epochs = 3
     # RL discount parameter.

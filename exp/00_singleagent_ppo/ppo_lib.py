@@ -147,7 +147,7 @@ def create_train_state(
 
 @functools.partial(jax.jit, static_argnums=1)
 def get_initial_params(key: jax.Array, model: nn.Module):
-  init_batch= {'image': jnp.ones((1, 4, 60, 60, 3) , jnp.float32)}
+  init_batch = {"image": jnp.ones((1, 4, 60, 60, 3), jnp.float32), "proprio": jnp.ones((1,7), jnp.float32)}
   initial_params = model.init(key, init_batch)['params']
   return initial_params
 

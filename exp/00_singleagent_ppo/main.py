@@ -26,6 +26,7 @@ def main(argv):
     from config import get_config
     from agent import ActorCritic, TheFramestackPolicy
     from vg_lib.utils.evaluation import compute_score_from_env
+    from env import AijMultiagentEnv
     config = get_config()
 
 
@@ -39,7 +40,7 @@ def main(argv):
 
         # return {'score': -1}
         video_name = os.path.join(FLAGS.workdir, f"{step:05}.mp4")
-        return {'score': compute_score_from_env(1, policies, video_path=video_name)}
+        return {'score': compute_score_from_env(1, policies, video_path=video_name, make_env_fn=AijMultiagentEnv)}
 
     train(
         model, config, FLAGS.workdir,
